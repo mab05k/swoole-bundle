@@ -23,10 +23,6 @@ final class Listener
 
     /**
      * Port constructor.
-     *
-     * @param ListenerConfig  $config
-     * @param Socket          $socket
-     * @param EventsCallbacks $callbacks
      */
     public function __construct(Socket $socket, ListenerConfig $config, EventsCallbacks $callbacks)
     {
