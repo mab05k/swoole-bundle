@@ -79,7 +79,15 @@ aliases:
   - &run-releaser
     run:
       name: Release version
-      command: docker-compose run --rm releaser
+      command: |-
+        pwd
+        git --version
+        git status
+        ls -lah
+        ls -lah .git
+        whoami
+        docker-compose run --entrypoint sh --rm releaser -c 'pwd && ls -lah && git --version && whoami && ls -lah .git && git status'
+        docker-compose run --rm releaser
 
   - &prepare-codeclimate-reporter
     run:
@@ -110,7 +118,8 @@ aliases:
 
   - &docker-env
     docker:
-      - image: k911/docker-client:compose
+      # - image: k911/docker-client:compose
+      - image: registry.gitlab.com/swoole-bundle/docker-client:feat-add-git-and-more-usable-tools-dae7b285-compose
     working_directory: ~/workdir
 
   # Steps
@@ -175,27 +184,69 @@ aliases:
         ignore: /.*/
 
 jobs:
+  k911-swoole-bundler-composer:
+    docker:
+      - image: docker.io/k911/swoole-bundle-composer:commit-$CIRCLE_SHA1
+    working_directory: /usr/src/app
+    steps:
+      # - checkout
+      - run:
+          name: testig
+          command: pwd && ls -lah
+      - run:
+          name: run
+          command: composer test
+
   docker-client-build-test:
     docker:
-      - image: k911/docker-client:compose
+      - image: registry.gitlab.com/swoole-bundle/docker-client:feat-add-git-and-more-usable-tools-dae7b285-compose
+      # - image: k911/docker-client:compose
     working_directory: ~/workdir
     environment:
-      <<: *docker-env-vars
       PHP_VERSION: 7.4
       PHP_API_VERSION: "20190902"
+      DOCKER_BUILDKIT: "1"
+      REGISTRY: docker.io
+      NAMESPACE: k911
+      PROJECT_NAME: swoole-bundle-composer
+      IMAGE_TAG: commit-$CIRCLE_SHA1
     steps:
       - checkout
       - setup_remote_docker:
           version: 18.09.3
       - run:
+          name: Print env
+          command: env
+      - run:
           name: Print docker info
-          command: docker version
+          command: docker info
       - run:
-          name: Test docker buildkit
-          command: docker build . -t "test:test" --progress plain
+          name: Login to github packages docker registry
+          command: >-
+            DOCKER_REGISTRY="docker.io"
+            DOCKER_USERNAME="$DOCKER_HUB_USERNAME"
+            DOCKER_PASSWORD="$DOCKER_HUB_TOKEN"
+            docker-registry-login
       - run:
-          name: Test building all services via docker-compose with buildkit enabled
-          command: docker-compose build --pull
+          name: Enable docker buidx
+          environment:
+            DOCKER_BUILDX_CONTEXT_CREATE: "1"
+            DOCKER_BUILDX_BUILDER_CREATE: "1"
+          command: docker-use-buildx
+      - run:
+          name: Test docker buildx
+          command: >-
+            docker build
+            --tag "$REGISTRY/$NAMESPACE/$PROJECT_NAME:commit-$CIRCLE_SHA1"
+            --target "Composer"
+            --progress "plain"
+            --cache-from "type=registry,ref=$REGISTRY/$NAMESPACE/$PROJECT_NAME-cache"
+            --cache-to "type=registry,ref=$REGISTRY/$NAMESPACE/$PROJECT_NAME-cache,mode=max"
+            --output "type=registry" .
+          # --output "type=docker" .
+      - run:
+          name: List docker images
+          command: docker image ls
 
   php-73-cc:
     <<: *docker-env
@@ -302,38 +353,43 @@ workflows:
   version: 2.1
   pull-request-checks:
     jobs:
+      - k911-swoole-bundler-composer:
+          <<: *pull-request-checks-job-filters
+          requires:
+            - check-composer-config
+            - docker-client-build-test
       - docker-client-build-test:
           <<: *pull-request-checks-job-filters
       - shellcheck:
           <<: *pull-request-checks-job-filters
       - check-composer-config:
           <<: *pull-request-checks-job-filters
-      - release-version-dry-run:
-          <<: *pull-request-checks-job-filters
-          requires:
-             - shellcheck
+      # - release-version-dry-run:
+      #     <<: *pull-request-checks-job-filters
+      #     requires:
+      #       - shellcheck
       - validate-commit-message:
           <<: *pull-request-checks-job-filters
       - php-73:
           <<: *pull-request-checks-job-filters
           requires:
-             - check-composer-config
+            - k911-swoole-bundler-composer
       - php-73-cc:
           <<: *pull-request-checks-job-filters
           requires:
-             - check-composer-config
+            - k911-swoole-bundler-composer
       - php-73-latest:
           <<: *pull-request-checks-job-filters
           requires:
-             - check-composer-config
+            - k911-swoole-bundler-composer
       - php-73-lowest:
           <<: *pull-request-checks-job-filters
           requires:
-             - check-composer-config
+            - k911-swoole-bundler-composer
       - php-74:
-         <<: *pull-request-checks-job-filters
-         requires:
-            - check-composer-config
+          <<: *pull-request-checks-job-filters
+          requires:
+            - k911-swoole-bundler-composer
   release:
     jobs:
       - shellcheck:
@@ -345,19 +401,19 @@ workflows:
       - php-73:
           <<: *release-job-filters
           requires:
-             - check-composer-config
+            - check-composer-config
       - php-73-cc:
           <<: *release-job-filters
           requires:
-             - check-composer-config
+            - check-composer-config
       - php-73-latest:
           <<: *release-job-filters
           requires:
-             - check-composer-config
+            - check-composer-config
       - php-73-lowest:
           <<: *release-job-filters
           requires:
-             - check-composer-config
+            - check-composer-config
       - release-version:
           <<: *release-job-filters
           requires:
