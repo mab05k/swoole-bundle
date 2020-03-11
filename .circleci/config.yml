@@ -184,23 +184,40 @@ aliases:
         ignore: /.*/
 
 jobs:
-  k911-swoole-bundler-composer:
+  swoole-bundle-composer-73:
     docker:
-      - image: docker.io/k911/swoole-bundle-composer:commit-$CIRCLE_SHA1
+      - image: docker.io/k911/swoole-bundle-composer:7.3-$CIRCLE_SHA1
     working_directory: /usr/src/app
     steps:
-      # - checkout
       - run:
-          name: testig
-          command: pwd && ls -lah
-      - run:
-          name: run
+          name: Run basic tests
           command: composer test
 
-  docker-client-build-test:
+  swoole-bundle-composer-74:
     docker:
-      - image: registry.gitlab.com/swoole-bundle/docker-client:feat-add-git-and-more-usable-tools-dae7b285-compose
-      # - image: k911/docker-client:compose
+      - image: docker.io/k911/swoole-bundle-composer:7.4-$CIRCLE_SHA1
+    working_directory: /usr/src/app
+    steps:
+      - run:
+          name: Run basic tests
+          command: composer test
+
+  swoole-bundle-releaser:
+    docker:
+      - image: docker.io/k911/swoole-bundle-releaser:7.4-$CIRCLE_SHA1
+    working_directory: /usr/src/app
+    environment:
+      DRY_RUN: "1"
+      GH_TOKEN: "xxx"
+    steps:
+      - checkout
+      - run:
+          name: Dry run release-version script
+          command: release-version
+
+  docker-buildx-bake-74:
+    docker:
+      - image: k911/docker-client:compose
     working_directory: ~/workdir
     environment:
       PHP_VERSION: 7.4
@@ -208,8 +225,8 @@ jobs:
       DOCKER_BUILDKIT: "1"
       REGISTRY: docker.io
       NAMESPACE: k911
-      PROJECT_NAME: swoole-bundle-composer
-      IMAGE_TAG: commit-$CIRCLE_SHA1
+      IMAGE: swoole-bundle
+      SERVICES: releaser cli composer
     steps:
       - checkout
       - setup_remote_docker:
@@ -234,19 +251,51 @@ jobs:
             DOCKER_BUILDX_BUILDER_CREATE: "1"
           command: docker-use-buildx
       - run:
-          name: Test docker buildx
+          name: Docker Buildx Bake all required images
           command: >-
-            docker build
-            --tag "$REGISTRY/$NAMESPACE/$PROJECT_NAME:commit-$CIRCLE_SHA1"
-            --target "Composer"
-            --progress "plain"
-            --cache-from "type=registry,ref=$REGISTRY/$NAMESPACE/$PROJECT_NAME-cache"
-            --cache-to "type=registry,ref=$REGISTRY/$NAMESPACE/$PROJECT_NAME-cache,mode=max"
-            --output "type=registry" .
-          # --output "type=docker" .
+            TAG="$PHP_VERSION-$CIRCLE_SHA1"
+            docker buildx bake --progress=plain $SERVICES
+
+  docker-buildx-bake-73:
+    docker:
+      - image: k911/docker-client:compose
+    working_directory: ~/workdir
+    environment:
+      PHP_VERSION: 7.3
+      PHP_API_VERSION: "20180731"
+      DOCKER_BUILDKIT: "1"
+      REGISTRY: docker.io
+      NAMESPACE: k911
+      IMAGE: swoole-bundle
+      SERVICES: cli composer
+    steps:
+      - checkout
+      - setup_remote_docker:
+          version: 18.09.3
       - run:
-          name: List docker images
-          command: docker image ls
+          name: Print env
+          command: env
+      - run:
+          name: Print docker info
+          command: docker info
+      - run:
+          name: Login to github packages docker registry
+          command: >-
+            DOCKER_REGISTRY="docker.io"
+            DOCKER_USERNAME="$DOCKER_HUB_USERNAME"
+            DOCKER_PASSWORD="$DOCKER_HUB_TOKEN"
+            docker-registry-login
+      - run:
+          name: Enable docker buidx
+          environment:
+            DOCKER_BUILDX_CONTEXT_CREATE: "1"
+            DOCKER_BUILDX_BUILDER_CREATE: "1"
+          command: docker-use-buildx
+      - run:
+          name: Docker Buildx Bake all required images
+          command: >-
+            TAG="$PHP_VERSION-$CIRCLE_SHA1"
+            docker buildx bake --progress=plain $SERVICES
 
   php-73-cc:
     <<: *docker-env
@@ -353,12 +402,28 @@ workflows:
   version: 2.1
   pull-request-checks:
     jobs:
-      - k911-swoole-bundler-composer:
+      - swoole-bundle-composer-73:
           <<: *pull-request-checks-job-filters
           requires:
             - check-composer-config
-            - docker-client-build-test
-      - docker-client-build-test:
+            - docker-buildx-bake-73
+      - swoole-bundle-composer-74:
+          <<: *pull-request-checks-job-filters
+          requires:
+            - check-composer-config
+            - docker-buildx-bake-74
+      - swoole-bundle-releaser:
+          <<: *pull-request-checks-job-filters
+          requires:
+            - shellcheck
+            - docker-buildx-bake-74
+            - check-composer-config
+            - validate-commit-message
+      - docker-buildx-bake-73:
+          <<: *pull-request-checks-job-filters
+          requires:
+            - docker-buildx-bake-74
+      - docker-buildx-bake-74:
           <<: *pull-request-checks-job-filters
       - shellcheck:
           <<: *pull-request-checks-job-filters
@@ -373,23 +438,28 @@ workflows:
       - php-73:
           <<: *pull-request-checks-job-filters
           requires:
-            - k911-swoole-bundler-composer
+            - swoole-bundle-composer-73
+            - swoole-bundle-composer-74
       - php-73-cc:
           <<: *pull-request-checks-job-filters
           requires:
-            - k911-swoole-bundler-composer
+            - swoole-bundle-composer-73
+            - swoole-bundle-composer-74
       - php-74-latest:
           <<: *pull-request-checks-job-filters
           requires:
-            - k911-swoole-bundler-composer
+            - swoole-bundle-composer-73
+            - swoole-bundle-composer-74
       - php-73-lowest:
           <<: *pull-request-checks-job-filters
           requires:
-            - k911-swoole-bundler-composer
+            - swoole-bundle-composer-73
+            - swoole-bundle-composer-74
       - php-74:
           <<: *pull-request-checks-job-filters
           requires:
-            - k911-swoole-bundler-composer
+            - swoole-bundle-composer-73
+            - swoole-bundle-composer-74
   release:
     jobs:
       - shellcheck:
